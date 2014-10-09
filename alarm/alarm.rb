@@ -1,3 +1,12 @@
+# alarm.rb
+# => webserver log analyzer 
+# => - detects NMAP scans
+# => - detects HTTP errors
+# => - detects shellcode
+# => live packet analysis
+# => - detects NMAP, NULL, XMAS Scans
+# => - checks for plaintext credit card numbers 
+
 require 'packetfu'
 require 'apachelogregex'
 
@@ -63,26 +72,7 @@ def proto(packet)
 end 
 
 
-# def analyze_log(f)
-# 	incident_number = 0
-
-# 	f.each_line { |line|
-#   		ip = line.split(' ')[0]
-#   		response = line.split(' ')[8]
-#   		if(response =~ /^4\d\d$/ )		# check if 399 < response < 500
-#   			incident_number += 1
-#   			http_error(ip)
-#   		end
-
-# 	}
-# end
-
-# if (ARGV[0] == "-r")
-# 	f = File.open(ARGV[1], 'r')	
-# 	analyze_log(f)
-# 	f.close
-
-
+# WEB SERVER LOG ANALYSIS
 if (ARGV[0] == "-r")
 	format = '%source %l %u %t \"%request\" %>status %b \"%{Referer}i\" \"%{User-Agent}i\"'
 	parser = ApacheLogRegex.new(format)
@@ -91,22 +81,26 @@ if (ARGV[0] == "-r")
 	File.foreach(ARGV[1]) do |line|
   	begin
     	hash = parser.parse(line)
-    	# {"%r"=>"GET /blog/index.xml HTTP/1.1", "%h"=>"87.18.183.252", ... }
-    	status = hash["%>status"]
-    	puts hash["%source"]
-    	puts status
-    	puts hash["%request"]
+		request = hash["%request"]
 
-    	if( status =~ /^4\d\d$/ )
+    	if( hash["%>status"] =~ /^4\d\d$/ ) # response codes in 400 range
     		ip = hash["%source"]
-    		request = hash["%request"]
     		incident_number += 1
-    		alert(incident_number, "HTTP", ip, "HTTP", request)
+    		alert(incident_number, "HTTP error", ip, "HTTP", request)
+    	end
+    	if( request =~ /\\x\h\h\h?\\x\h\h\h?/)						# line 38495 of the weblog has shell code for example
+    		incident_number += 1
+    		alert(incident_number, "Shellcode", ip, "HTTP", request)
+    	end
+    	if( line =~ (/nmap/i) )
+			alert(incident_number, "Nmap scan", ip, "HTTP", request)
     	end
   	rescue ApacheLogRegex::ParseError => e
     	puts "Error parsing log file: " + e.message
   	end
 end
+
+#LIVE PACKET ANALYSIS
 else
 	cap = PacketFu::Capture.new(:start => true, :iface => 'eth0', :promisc => true)
 	incident_number = 0
@@ -133,7 +127,7 @@ else
 
 		if (cc != "N/A")
 			incident_number += 1
-			cc_alert(incident_number, packet.ip_saddr, protocol, "CC")
+			cc_alert(incident_number, packet.ip_saddr, protocol, packet.payload)
 		end
 	end
 end
